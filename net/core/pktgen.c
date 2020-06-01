@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Authors:
  * Copyright 2001, 2002 by Robert Olsson <robert.olsson@its.uu.se>
@@ -7,12 +8,6 @@
  * Alexey Kuznetsov  <kuznet@ms2.inr.ac.ru>
  * Ben Greear <greearb@candelatech.com>
  * Jens Låås <jens.laas@data.slu.se>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
- *
  *
  * A tool for loading the network with preconfigurated packets.
  * The tool is implemented as a linux module.  Parameters are output
@@ -134,6 +129,7 @@
 #include <linux/freezer.h>
 #include <linux/delay.h>
 #include <linux/timer.h>
+#include <linux/time.h>
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/skbuff.h>
@@ -271,7 +267,7 @@ static inline s64 divremdi3(s64 x, s64 y, int type)
 /* End of hacks to deal with 64-bit math on x86 */
 
 /** Convert to micro-seconds */
-static inline __u64 ts_to_us(const struct timespec *ts)
+static inline __u64 ts_to_us(const struct timespec64 *ts)
 {
 	__u64 us = ts->tv_nsec / NSEC_PER_USEC;
 	us += ((__u64) ts->tv_sec) * 1000000ULL;
@@ -317,8 +313,8 @@ static inline __u64 pg_div64(__u64 n, __u64 base)
 
 static inline __u64 getCurUs(void)
 {
-	struct timespec ts;
-	getnstimeofday(&ts);
+	struct timespec64 ts;
+	ktime_get_real_ts64(&ts);
 	return ts_to_us(&ts);
 }
 
@@ -326,9 +322,9 @@ static inline __u64 getCurUs(void)
 /* Since the machine booted. */
 static __u64 getRelativeCurNs(void) {
 	if (!use_rel_ts) {
-		struct timespec ts;
-		getnstimeofday(&ts);
-		return timespec_to_ns(&ts);
+		struct timespec64 ts;
+		ktime_get_real_ts64(&ts);
+		return timespec64_to_ns(&ts);
 	}
 	else {
 		/* Seems you must disable pre-empt to call sched_clock. --Ben */
@@ -359,12 +355,12 @@ static void timestamp_skb(struct pktgen_dev* pkt_dev, struct pktgen_hdr* pgh) {
 		pgh->tv_lo = htonl(lo);
 	}
 	else {
-		struct timespec ts;
+		struct timespec64 ts;
 		s64 n;
 		__u32 hi;
 		__u32 lo;
-		getnstimeofday(&ts);
-		n = timespec_to_ns(&ts);
+		ktime_get_real_ts64(&ts);
+		n = timespec64_to_ns(&ts);
 		hi = n >> 32;
 		lo = n;
 		pgh->tv_hi = htonl(hi);
@@ -567,13 +563,12 @@ long pktgen_proc_ioctl(struct file* file, unsigned int cmd,
         return err;
 }/* pktgen_proc_ioctl */
 
-static const struct file_operations pktgen_fops = {
-	.open    = pgctrl_open,
-	.read    = seq_read,
-	.llseek  = seq_lseek,
-	.write   = pgctrl_write,
-	.release = single_release,
-        .unlocked_ioctl   = pktgen_proc_ioctl,
+static const struct proc_ops pktgen_proc_ops = {
+	.proc_open	= pgctrl_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_write	= pgctrl_write,
+	.proc_release	= single_release,
 };
 
 static int pktgen_if_show(struct seq_file *seq, void *v)
@@ -1937,13 +1932,12 @@ static int pktgen_if_open(struct inode *inode, struct file *file)
 	return single_open(file, pktgen_if_show, PDE_DATA(inode));
 }
 
-static const struct file_operations pktgen_if_fops = {
-	.open    = pktgen_if_open,
-	.read    = seq_read,
-	.llseek  = seq_lseek,
-	.write   = pktgen_if_write,
-	.release = single_release,
-        .unlocked_ioctl   = pktgen_proc_ioctl,
+static const struct proc_ops pktgen_if_proc_ops = {
+	.proc_open	= pktgen_if_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_write	= pktgen_if_write,
+	.proc_release	= single_release,
 };
 
 static int pktgen_thread_show(struct seq_file *seq, void *v)
@@ -2103,15 +2097,13 @@ static int pktgen_thread_open(struct inode *inode, struct file *file)
 	return single_open(file, pktgen_thread_show, PDE_DATA(inode));
 }
 
-static const struct file_operations pktgen_thread_fops = {
-	.open    = pktgen_thread_open,
-	.read    = seq_read,
-	.llseek  = seq_lseek,
-	.write   = pktgen_thread_write,
-	.release = single_release,
-        .unlocked_ioctl   = pktgen_proc_ioctl,
+static const struct proc_ops pktgen_thread_proc_ops = {
+	.proc_open	= pktgen_thread_open,
+	.proc_read	= seq_read,
+	.proc_lseek	= seq_lseek,
+	.proc_write	= pktgen_thread_write,
+	.proc_release	= single_release,
 };
-
 
 /* Think find or remove for NN */
 static struct pktgen_dev *__pktgen_NN_threads(const struct pktgen_net *pn,
@@ -2184,7 +2176,7 @@ static void pktgen_change_name(const struct pktgen_net *pn, struct net_device *d
 
 			pkt_dev->entry = proc_create_data(dev->name, 0600,
 							  pn->proc_dir,
-							  &pktgen_if_fops,
+							  &pktgen_if_proc_ops,
 							  pkt_dev);
 			if (!pkt_dev->entry)
 				printk(KERN_ERR "pktgen: can't move proc "
@@ -2266,8 +2258,8 @@ static int pktgen_setup_dev(const struct pktgen_net *pn,
 		return -ENODEV;
 	}
 
-	if (odev->type != ARPHRD_ETHER) {
-		printk(KERN_ERR "pktgen: not an ethernet device: \"%s\"\n", pkt_dev->ifname);
+	if (odev->type != ARPHRD_ETHER && odev->type != ARPHRD_LOOPBACK) {
+		printk(KERN_ERR "pktgen: not an ethernet or loopback device: \"%s\"\n", pkt_dev->ifname);
 		err = -EINVAL;
 	} else if (!netif_running(odev)) {
 		printk(KERN_ERR "pktgen: device is down: \"%s\"\n", pkt_dev->ifname);
@@ -2398,9 +2390,11 @@ static void pktgen_setup_inject(struct pktgen_net *pn, struct pktgen_dev *pkt_de
 			rcu_read_lock();
 			in_dev = __in_dev_get_rcu(pkt_dev->odev);
 			if (in_dev) {
-				if (in_dev->ifa_list) {
-					pkt_dev->saddr_min =
-					    in_dev->ifa_list->ifa_address;
+				const struct in_ifaddr *ifa;
+
+				ifa = rcu_dereference(in_dev->ifa_list);
+				if (ifa) {
+					pkt_dev->saddr_min = ifa->ifa_address;
 					pkt_dev->saddr_max = pkt_dev->saddr_min;
 				}
 			}
@@ -3713,12 +3707,14 @@ int pktgen_receive(struct sk_buff* skb) {
 					else {
 						s64 tx;
 						s64 rx;
-						struct timespec rxts;
+						struct __kernel_old_timespec rxts;
 						s64 d;
 						if (! skb->tstamp)
 							__net_timestamp(skb);
 						skb_get_timestampns(skb, &rxts);
-						rx = timespec_to_ns(&rxts);
+						rx = rxts.tv_sec;
+						rx *= 1000000000; /* convert sec to ns */
+						rx += rxts.tv_nsec;
 
 						tx = ntohl(pgh->tv_hi);
 						tx = tx << 32;
@@ -4604,7 +4600,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 		pkt_dev->clone_skb = pg_clone_skb_d;
 
 	pkt_dev->entry = proc_create_data(ifname, 0600, t->net->proc_dir,
-					  &pktgen_if_fops, pkt_dev);
+					  &pktgen_if_proc_ops, pkt_dev);
 
 	if (!pkt_dev->entry) {
 		printk(KERN_ERR "pktgen: cannot create %s/%s procfs entry.\n",
@@ -4676,7 +4672,7 @@ static int __init pktgen_create_thread(int cpu, struct pktgen_net *pn)
 	t->tsk = p;
 
 	pe = proc_create_data(t->tsk->comm, 0600, pn->proc_dir,
-			      &pktgen_thread_fops, t);
+			      &pktgen_thread_proc_ops, t);
 	if (!pe) {
 		printk(KERN_ERR "pktgen: cannot create %s/%s procfs entry.\n",
 		       PG_PROC_DIR, t->tsk->comm);
@@ -4772,7 +4768,7 @@ static int __net_init pg_net_init(struct net *net)
 		return -ENODEV;
 	}
 
-	pe = proc_create(PGCTRL, 0600, pn->proc_dir, &pktgen_fops);
+	pe = proc_create(PGCTRL, 0600, pn->proc_dir, &pktgen_proc_ops);
 	if (pe == NULL) {
 		pr_err("cannot create %s procfs entry.\n", PGCTRL);
 		ret = -EINVAL;
